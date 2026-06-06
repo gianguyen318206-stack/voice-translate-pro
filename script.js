@@ -36,7 +36,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const cameraOverlay = $('camera-overlay'), cameraVideo = $('camera-video');
     const cameraCanvas = $('camera-canvas'), captureBtn = $('capture-btn'), closeCamera = $('close-camera');
     const ocrStatus = $('ocr-status');
-    const waveCanvas = $('waveform'), waveDivider = document.querySelector('.wave-divider');
+    const waveDivider = document.querySelector('.wave-divider');
     const toastEl = $('toast');
 
     // ─── POPULATE SELECTS ───
@@ -386,63 +386,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ═══════════════════════════════════════
-    //  WAVEFORM
+    //  WAVEFORM (CSS-only, no getUserMedia)
+    //  Không dùng getUserMedia để tránh xung
+    //  đột mic với SpeechRecognition trên mobile
     // ═══════════════════════════════════════
-    let waveAudioCtx, analyser, micStream, animId;
-    const wCtx = waveCanvas.getContext('2d');
-
     function startWave() {
         waveDivider.classList.add('active');
-        try {
-            waveAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            if (waveAudioCtx.state === 'suspended') waveAudioCtx.resume();
-            analyser = waveAudioCtx.createAnalyser();
-            analyser.fftSize = 256;
-            navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-                micStream = stream;
-                waveAudioCtx.createMediaStreamSource(stream).connect(analyser);
-                drawWave();
-            }).catch(err => console.warn('[VT] Waveform mic error:', err));
-        } catch (err) { console.warn('[VT] Waveform error:', err); }
-    }
-
-    function drawWave() {
-        const buf = analyser.frequencyBinCount;
-        const data = new Uint8Array(buf);
-        const w = waveCanvas.width = waveCanvas.parentElement.clientWidth * 2;
-        const h = waveCanvas.height = waveCanvas.parentElement.clientHeight * 2;
-        const color1 = recMode === 'partner' ? [239,68,68] : [59,130,246];
-        const color2 = recMode === 'partner' ? [168,85,247] : [6,182,212];
-
-        (function draw() {
-            animId = requestAnimationFrame(draw);
-            analyser.getByteFrequencyData(data);
-            wCtx.clearRect(0, 0, w, h);
-            const bars = 20, bw = w / bars * 0.55, gap = w / bars * 0.45;
-            for (let i = 0; i < bars; i++) {
-                const v = data[Math.floor(i * buf / bars)] / 255;
-                const bh = Math.max(4, v * h * 0.8);
-                const x = i * (bw + gap) + gap / 2, y = (h - bh) / 2;
-                const t = i / bars;
-                const r = Math.round(color1[0] * (1 - t) + color2[0] * t);
-                const g = Math.round(color1[1] * (1 - t) + color2[1] * t);
-                const b = Math.round(color1[2] * (1 - t) + color2[2] * t);
-                wCtx.fillStyle = `rgba(${r},${g},${b},${0.35 + v * 0.65})`;
-                wCtx.beginPath();
-                wCtx.roundRect(x, y, bw, bh, bw / 2);
-                wCtx.fill();
-            }
-        })();
-    }
-
-    function stopWave() {
-        waveDivider.classList.remove('active');
-        cancelAnimationFrame(animId);
-        if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
-        if (waveAudioCtx && waveAudioCtx.state !== 'closed') {
-            waveAudioCtx.close().catch(() => {});
+        if (recMode === 'partner') {
+            waveDivider.classList.add('partner-wave');
+            waveDivider.classList.remove('user-wave');
+        } else {
+            waveDivider.classList.add('user-wave');
+            waveDivider.classList.remove('partner-wave');
         }
-        wCtx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
+    }
+    function stopWave() {
+        waveDivider.classList.remove('active', 'partner-wave', 'user-wave');
     }
 
     // ═══════════════════════════════════════
