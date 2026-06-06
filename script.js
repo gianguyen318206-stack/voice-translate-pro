@@ -129,9 +129,12 @@ document.addEventListener('DOMContentLoaded', () => {
             .then(() => {
                 ttsPlayer.pause();
                 audioUnlocked = true;
-                console.log('[VT] ttsPlayer successfully unlocked');
+                logDebug('🔓 Đã mở khoá ttsPlayer và kích hoạt Audio Session', 'ok');
             })
             .catch(e => console.warn('[VT] ttsPlayer unlock deferred:', e.message));
+
+        // Bless SpeechSynthesis right here on initial user gesture!
+        blessSpeechSynthesis();
     }
     ['click', 'touchstart'].forEach(evt => {
         document.addEventListener(evt, unlockAudio, { once: false, passive: true });
@@ -180,7 +183,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const utter = new SpeechSynthesisUtterance('');
                 utter.volume = 0.0;
                 window.speechSynthesis.speak(utter);
-                console.log('[VT] SpeechSynthesis blessed');
+                logDebug('🎙️ Đã bless SpeechSynthesis trên thiết bị', 'ok');
             } catch (e) {
                 console.warn('[VT] SpeechSynthesis bless error:', e);
             }
@@ -235,6 +238,11 @@ document.addEventListener('DOMContentLoaded', () => {
     function playNextSpeechSynthesis() {
         if (!ttsQueue.length) {
             ttsPlaying = false;
+            // Actively cancel and clean up the speechSynthesis engine to release hardware audio session
+            if (window.speechSynthesis) {
+                window.speechSynthesis.cancel();
+                logDebug('🧹 Đã dọn dẹp và đóng Audio Session của SpeechSynthesis', 'ok');
+            }
             return;
         }
         const text = ttsQueue.shift();
@@ -278,7 +286,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ═══════════════════════════════════════
-    //  SPEECH RECOGNITION
+    //  SPEECH RECOGNITION (Singleton Model)
     // ═══════════════════════════════════════
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     let recognition = null, isRec = false, recMode = null, accText = '', userStop = false;
@@ -288,16 +296,74 @@ document.addEventListener('DOMContentLoaded', () => {
             navigator.mediaDevices.getUserMedia({ audio: true })
                 .then(stream => {
                     stream.getTracks().forEach(t => t.stop());
-                    console.log('[VT] Mic permission granted');
+                    logDebug('🎙️ Quyền Microphone đã được cấp phép', 'ok');
                 })
                 .catch(err => console.warn('[VT] Mic permission denied:', err.message));
         }
     }
     requestMicPermission();
 
+    // Initialize Singleton Recognition once during load
+    if (SR) {
+        try {
+            recognition = new SR();
+            recognition.continuous = false;
+            recognition.interimResults = true;
+            recognition.maxAlternatives = 1;
+
+            recognition.onstart = () => {
+                logDebug(`🎤 [SpeechRecognition] Bắt đầu nhận diện (${recognition.lang})`, 'info');
+            };
+
+            recognition.onresult = (e) => {
+                let interim = '';
+                let finalText = '';
+                for (let i = e.resultIndex; i < e.results.length; i++) {
+                    const transcript = e.results[i][0].transcript;
+                    if (e.results[i].isFinal) {
+                        finalText += transcript;
+                    } else {
+                        interim += transcript;
+                    }
+                }
+                if (finalText) accText += finalText;
+                const textEl = recMode === 'partner' ? textPartner : textUser;
+                if (textEl) {
+                    textEl.value = accText + (interim ? interim : '');
+                }
+                logDebug(`✍️ [Result] Interim: "${interim}", Final: "${finalText}"`, 'info');
+            };
+
+            recognition.onerror = (e) => {
+                logDebug(`⚠️ [Error] Lỗi SpeechRecognition: "${e.error}"`, 'err');
+                if (e.error === 'no-speech') {
+                    toast('🎤 Không nghe thấy... Hãy nói lại');
+                    cleanup();
+                    return;
+                }
+                if (e.error === 'aborted') return;
+                if (e.error === 'not-allowed') {
+                    cleanup();
+                    toast('⚠️ Vui lòng cấp quyền Microphone cho ứng dụng!', 'error');
+                    return;
+                }
+                cleanup();
+                toast('Lỗi mic: ' + e.error, 'error');
+            };
+
+            recognition.onend = () => {
+                logDebug(`🛑 [SpeechRecognition] Kết thúc thu âm`, 'info');
+                cleanup();
+                processResult();
+            };
+        } catch (err) {
+            logDebug(`❌ Lỗi khởi tạo SpeechRecognition: ${err.message}`, 'err');
+        }
+    }
+
     function startRec(mode) {
-        if (!SR) {
-            toast('Trình duyệt không hỗ trợ thu âm!', 'error');
+        if (!recognition) {
+            toast('Trình duyệt không hỗ trợ thu âm hoặc lỗi init!', 'error');
             return;
         }
         if (isRec) {
@@ -305,8 +371,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Bless SpeechSynthesis + stop any active playback
-        blessSpeechSynthesis();
+        // CHỈ dừng loa đang phát, tuyệt đối không kích hoạt âm thanh mới nào ở đây
         stopSpeak();
         haptic(50);
 
@@ -321,64 +386,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const langCode = mode === 'partner' ? langPartnerEl.value : langUserEl.value;
         const btn = mode === 'partner' ? micPartnerBtn : micUserBtn;
-        const textEl = mode === 'partner' ? textPartner : textUser;
 
         btn.classList.add('recording');
         toast(mode === 'partner' ? '🎤 Đang nghe đối tác...' : '🎤 Đang nghe bạn nói...');
 
-        recognition = new SR();
+        // Update language configuration on the singleton instance
         recognition.lang = langCode;
-        
-        // Critical for mobile: continuous=false prevents browser lockouts.
-        // It captures one sentence and fires onend naturally.
-        recognition.continuous = false; 
-        recognition.interimResults = true;
-        recognition.maxAlternatives = 1;
-
-        recognition.onstart = () => {
-            logDebug(`🎤 [SpeechRecognition] Bắt đầu nhận diện (${langCode})`, 'info');
-        };
-
-        recognition.onresult = (e) => {
-            let interim = '';
-            let finalText = '';
-            for (let i = e.resultIndex; i < e.results.length; i++) {
-                const transcript = e.results[i][0].transcript;
-                if (e.results[i].isFinal) {
-                    finalText += transcript;
-                } else {
-                    interim += transcript;
-                }
-            }
-            if (finalText) accText += finalText;
-            textEl.value = accText + (interim ? interim : '');
-            logDebug(`✍️ [Result] Interim: "${interim}", Final: "${finalText}"`, 'info');
-        };
-
-        recognition.onerror = (e) => {
-            logDebug(`⚠️ [Error] Lỗi SpeechRecognition: "${e.error}"`, 'err');
-            if (e.error === 'no-speech') {
-                toast('🎤 Không nghe thấy... Hãy nói lại');
-                cleanup();
-                return;
-            }
-            if (e.error === 'aborted') return;
-            if (e.error === 'not-allowed') {
-                cleanup();
-                toast('⚠️ Vui lòng cấp quyền Microphone cho ứng dụng!', 'error');
-                return;
-            }
-            cleanup();
-            toast('Lỗi mic: ' + e.error, 'error');
-        };
-
-        recognition.onend = () => {
-            logDebug(`🛑 [SpeechRecognition] Kết thúc thu âm`, 'info');
-            cleanup();
-            processResult();
-        };
 
         try {
+            // Force abort any stuck previous session to clean state
+            try { recognition.abort(); } catch(e) {}
+            
             logDebug('🚀 Đang gọi recognition.start() đồng bộ...', 'info');
             recognition.start();
             startWave();
@@ -390,7 +408,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function stopRec() {
-        if (!isRec) return;
+        if (!isRec || !recognition) return;
         haptic(30);
         userStop = true;
         try {
@@ -603,11 +621,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     setTimeout(() => window.location.reload(true), 500);
                 });
             } else {
-                logDebug('✅ Không có Service Worker cũ kẹt. Đã nạp code mới v28.', 'ok');
+                logDebug('✅ Không có Service Worker cũ kẹt. Đã nạp code mới v29.', 'ok');
             }
         });
     }
 
-    console.log('[VT] Voice Translate Pro v28 loaded');
+    console.log('[VT] Voice Translate Pro v29 loaded');
     toast('✨ Sẵn sàng phiên dịch!', 'success');
 });
