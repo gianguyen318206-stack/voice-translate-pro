@@ -1,5 +1,6 @@
 /* =============================================
-   VOICE TRANSLATE PRO — MAIN LOGIC v2
+   VOICE TRANSLATE PRO — MAIN LOGIC v3
+   Fixed: Audio autoplay + mic reliability
    ============================================= */
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -56,7 +57,33 @@ document.addEventListener('DOMContentLoaded', () => {
         toastEl.className = 'toast show ' + type;
         toastT = setTimeout(() => toastEl.className = 'toast', 2500);
     }
-    function haptic(ms = 25) { navigator.vibrate && navigator.vibrate(ms); }
+    function haptic(ms = 25) { try { navigator.vibrate && navigator.vibrate(ms); } catch {} }
+
+    // ═══════════════════════════════════════
+    //  AUDIO UNLOCK (critical for mobile)
+    //  Mobile browsers block audio until user
+    //  interacts with the page. We unlock on
+    //  first touch/click.
+    // ═══════════════════════════════════════
+    let audioUnlocked = false;
+    function unlockAudio() {
+        if (audioUnlocked) return;
+        try {
+            // Method 1: Play silent audio
+            const a = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=');
+            a.volume = 0.01;
+            a.play().then(() => { a.pause(); a.remove(); }).catch(() => {});
+            // Method 2: Resume AudioContext
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            ctx.resume().then(() => ctx.close());
+            audioUnlocked = true;
+            console.log('[VT] Audio unlocked');
+        } catch (e) { console.warn('[VT] Audio unlock failed:', e); }
+    }
+    // Unlock on ANY user interaction
+    ['click', 'touchstart', 'touchend'].forEach(evt => {
+        document.addEventListener(evt, unlockAudio, { once: false, passive: true });
+    });
 
     // ═══════════════════════════════════════
     //  TRANSLATION
@@ -66,42 +93,110 @@ document.addEventListener('DOMContentLoaded', () => {
         const f = getLang(fromCode).tr, t = getLang(toCode).tr;
         try {
             const r = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=${f}&tl=${t}&dt=t&q=${encodeURIComponent(text)}`);
-            if (!r.ok) throw 0;
+            if (!r.ok) throw new Error('HTTP ' + r.status);
             const d = await r.json();
             return d[0].map(s => s[0]).join('');
-        } catch { toast('Lỗi dịch! Kiểm tra mạng.', 'error'); return ''; }
+        } catch (e) {
+            console.error('[VT] Translate error:', e);
+            toast('Lỗi dịch! Kiểm tra mạng.', 'error');
+            return '';
+        }
     }
 
     // ═══════════════════════════════════════
-    //  TTS (Google)
+    //  TTS - Google TTS + SpeechSynthesis fallback
     // ═══════════════════════════════════════
     let ttsAudio = null, ttsQueue = [], ttsPlaying = false;
 
-    function splitTTS(text) {
-        const chunks = [], sents = text.match(/[^.!?。！？\n]+[.!?。！？\n]?/g) || [text];
+    function splitTTS(text, maxLen = 180) {
+        const chunks = [];
+        const sents = text.match(/[^.!?。！？\n]+[.!?。！？\n]?/g) || [text];
         let buf = '';
-        sents.forEach(s => { if ((buf+s).length > 180 && buf) { chunks.push(buf.trim()); buf=''; } buf+=s; });
+        sents.forEach(s => {
+            if ((buf + s).length > maxLen && buf) { chunks.push(buf.trim()); buf = ''; }
+            buf += s;
+        });
         if (buf.trim()) chunks.push(buf.trim());
         return chunks;
     }
+
     function speak(text, langCode) {
         if (!text.trim()) return;
         stopSpeak();
-        const tts = getLang(langCode).tts;
-        ttsQueue = splitTTS(text).map(c => `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(c)}&tl=${tts}&client=tw-ob`);
-        ttsPlaying = true; playNext();
+        const ttsCode = getLang(langCode).tts;
+        const chunks = splitTTS(text);
+
+        // Build queue of Google TTS URLs
+        ttsQueue = chunks.map(c =>
+            `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(c)}&tl=${ttsCode}&client=tw-ob`
+        );
+        ttsPlaying = true;
+        console.log('[VT] TTS start:', ttsCode, chunks.length, 'chunks');
+        playNextChunk(langCode);
     }
-    function playNext() {
-        if (!ttsQueue.length) { ttsPlaying = false; return; }
-        ttsAudio = new Audio(ttsQueue.shift());
-        ttsAudio.volume = 1;
-        ttsAudio.onended = playNext;
-        ttsAudio.onerror = () => { console.warn('TTS error'); playNext(); };
-        ttsAudio.play().catch(playNext);
+
+    function playNextChunk(langCode) {
+        if (!ttsQueue.length) {
+            ttsPlaying = false;
+            console.log('[VT] TTS done');
+            return;
+        }
+
+        const url = ttsQueue.shift();
+        ttsAudio = new Audio();
+        ttsAudio.src = url;
+        ttsAudio.volume = 1.0;
+
+        ttsAudio.onended = () => playNextChunk(langCode);
+        ttsAudio.onerror = (e) => {
+            console.warn('[VT] Google TTS failed, trying SpeechSynthesis fallback', e);
+            // Fallback to browser SpeechSynthesis
+            speakFallback(decodeURIComponent(url.match(/q=([^&]+)/)?.[1] || ''), langCode);
+        };
+
+        const playPromise = ttsAudio.play();
+        if (playPromise) {
+            playPromise.catch((e) => {
+                console.warn('[VT] Audio play blocked:', e.message, '- using fallback');
+                speakFallback(decodeURIComponent(url.match(/q=([^&]+)/)?.[1] || ''), langCode);
+            });
+        }
     }
+
+    // SpeechSynthesis fallback when Google TTS fails
+    function speakFallback(text, langCode) {
+        if (!text || !window.speechSynthesis) {
+            playNextChunk(langCode);
+            return;
+        }
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(text);
+        const ttsCode = getLang(langCode).tts;
+        utter.lang = langCode || ttsCode;
+        utter.rate = 0.9;
+        utter.volume = 1.0;
+
+        // Try to find a matching voice
+        const voices = window.speechSynthesis.getVoices();
+        const match = voices.find(v => v.lang.startsWith(ttsCode)) || voices.find(v => v.lang.startsWith(ttsCode.split('-')[0]));
+        if (match) utter.voice = match;
+
+        utter.onend = () => playNextChunk(langCode);
+        utter.onerror = () => playNextChunk(langCode);
+        window.speechSynthesis.speak(utter);
+    }
+
     function stopSpeak() {
-        ttsQueue = []; ttsPlaying = false;
-        if (ttsAudio) { ttsAudio.pause(); ttsAudio = null; }
+        ttsQueue = [];
+        ttsPlaying = false;
+        if (ttsAudio) { ttsAudio.pause(); ttsAudio.src = ''; ttsAudio = null; }
+        if (window.speechSynthesis) window.speechSynthesis.cancel();
+    }
+
+    // Pre-load voices for fallback
+    if (window.speechSynthesis) {
+        window.speechSynthesis.getVoices();
+        window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
     }
 
     // ═══════════════════════════════════════
@@ -110,58 +205,150 @@ document.addEventListener('DOMContentLoaded', () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     let recognition = null, isRec = false, recMode = null, accText = '', userStop = false;
 
-    // Pre-request mic
-    if (navigator.mediaDevices?.getUserMedia) {
-        navigator.mediaDevices.getUserMedia({audio:true}).then(s => s.getTracks().forEach(t=>t.stop())).catch(()=>{});
+    // Pre-request mic permission
+    function requestMicPermission() {
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(stream => {
+                    stream.getTracks().forEach(t => t.stop());
+                    console.log('[VT] Mic permission granted');
+                })
+                .catch(err => console.warn('[VT] Mic permission denied:', err.message));
+        }
     }
+    requestMicPermission();
 
     function startRec(mode) {
-        if (!SR) { toast('Trình duyệt không hỗ trợ!', 'error'); return; }
-        if (isRec) { stopRec(); return; }
-        stopSpeak(); haptic(50);
+        // Unlock audio on user gesture (important!)
+        unlockAudio();
 
-        // Tự động xoá text cũ khi bắt đầu thu câu mới
+        if (!SR) {
+            toast('Trình duyệt không hỗ trợ thu âm!', 'error');
+            return;
+        }
+
+        // If already recording, stop
+        if (isRec) {
+            stopRec();
+            return;
+        }
+
+        stopSpeak();
+        haptic(50);
+
+        // Auto-clear previous text
         textPartner.value = '';
         textUser.value = '';
 
-        recMode = mode; accText = ''; userStop = false; isRec = true;
+        recMode = mode;
+        accText = '';
+        userStop = false;
+        isRec = true;
 
-        const lang = mode === 'partner' ? langPartnerEl.value : langUserEl.value;
+        const langCode = mode === 'partner' ? langPartnerEl.value : langUserEl.value;
         const btn = mode === 'partner' ? micPartnerBtn : micUserBtn;
-        const txt = mode === 'partner' ? textPartner : textUser;
+        const textEl = mode === 'partner' ? textPartner : textUser;
 
         btn.classList.add('recording');
-        toast(mode === 'partner' ? '🎤 Đang nghe đối tác...' : '🎤 Đang nghe bạn...');
+        toast(mode === 'partner' ? '🎤 Đang nghe đối tác...' : '🎤 Đang nghe bạn nói...');
 
+        // Create fresh recognition instance
         recognition = new SR();
-        recognition.lang = lang;
+        recognition.lang = langCode;
         recognition.continuous = true;
         recognition.interimResults = true;
+        recognition.maxAlternatives = 1;
 
-        recognition.onresult = e => {
-            let interim = '', final = '';
+        recognition.onstart = () => {
+            console.log('[VT] Recognition started, lang:', langCode);
+        };
+
+        recognition.onresult = (e) => {
+            let interim = '';
+            let finalText = '';
             for (let i = e.resultIndex; i < e.results.length; i++) {
-                const t = e.results[i][0].transcript;
-                e.results[i].isFinal ? final += t : interim += t;
+                const transcript = e.results[i][0].transcript;
+                if (e.results[i].isFinal) {
+                    finalText += transcript;
+                } else {
+                    interim += transcript;
+                }
             }
-            if (final) accText += final;
-            txt.value = accText + interim;
+            if (finalText) accText += finalText;
+            textEl.value = accText + (interim ? interim : '');
+            console.log('[VT] Result:', { final: finalText, interim, accumulated: accText });
         };
-        recognition.onerror = e => {
-            if (e.error === 'no-speech' || e.error === 'aborted') return;
-            cleanup(); toast('Lỗi thu âm: ' + e.error, 'error');
-        };
-        recognition.onend = () => {
-            if (!userStop && isRec) {
-                try { recognition.start(); } catch { cleanup(); processRec(); }
+
+        recognition.onerror = (e) => {
+            console.error('[VT] Recognition error:', e.error);
+            if (e.error === 'no-speech') {
+                // No speech detected, keep listening
+                toast('🎤 Không nghe thấy... Hãy nói to hơn');
                 return;
             }
-            cleanup(); processRec();
+            if (e.error === 'aborted') return;
+            if (e.error === 'not-allowed') {
+                cleanup();
+                toast('⚠️ Vui lòng cho phép sử dụng Microphone!', 'error');
+                return;
+            }
+            if (e.error === 'network') {
+                cleanup();
+                toast('⚠️ Lỗi mạng! Kiểm tra kết nối internet.', 'error');
+                return;
+            }
+            cleanup();
+            toast('Lỗi thu âm: ' + e.error, 'error');
         };
-        try { recognition.start(); startWave(); } catch { cleanup(); toast('Không thể mở mic!','error'); }
+
+        recognition.onend = () => {
+            console.log('[VT] Recognition ended, userStop:', userStop, 'isRec:', isRec);
+            if (!userStop && isRec) {
+                // Auto-restart (mobile browsers stop after each sentence)
+                try {
+                    setTimeout(() => {
+                        if (isRec && !userStop) {
+                            recognition.start();
+                            console.log('[VT] Auto-restarted recognition');
+                        }
+                    }, 100);
+                } catch (err) {
+                    console.error('[VT] Auto-restart failed:', err);
+                    cleanup();
+                    processResult();
+                }
+                return;
+            }
+            cleanup();
+            processResult();
+        };
+
+        // Start recognition
+        try {
+            recognition.start();
+            startWave();
+            console.log('[VT] Recognition.start() called');
+        } catch (err) {
+            console.error('[VT] Failed to start recognition:', err);
+            cleanup();
+            toast('Không thể bật microphone!', 'error');
+        }
     }
 
-    function stopRec() { if (!isRec) return; haptic(); userStop = true; try { recognition.stop(); } catch {} }
+    function stopRec() {
+        if (!isRec) return;
+        haptic(30);
+        userStop = true;
+        console.log('[VT] User requested stop');
+        try {
+            recognition.stop();
+        } catch (err) {
+            console.warn('[VT] Stop error:', err);
+            cleanup();
+            processResult();
+        }
+    }
+
     function cleanup() {
         isRec = false;
         micPartnerBtn.classList.remove('recording');
@@ -169,43 +356,56 @@ document.addEventListener('DOMContentLoaded', () => {
         stopWave();
     }
 
-    async function processRec() {
+    async function processResult() {
         const text = accText.trim();
-        if (!text || !recMode) return;
-        const fromL = recMode==='partner' ? langPartnerEl.value : langUserEl.value;
-        const toL = recMode==='partner' ? langUserEl.value : langPartnerEl.value;
-        const srcEl = recMode==='partner' ? textPartner : textUser;
-        const dstEl = recMode==='partner' ? textUser : textPartner;
-        srcEl.value = text;
+        if (!text || !recMode) {
+            console.log('[VT] No text to process');
+            return;
+        }
+
+        const fromLang = recMode === 'partner' ? langPartnerEl.value : langUserEl.value;
+        const toLang   = recMode === 'partner' ? langUserEl.value : langPartnerEl.value;
+        const sourceEl = recMode === 'partner' ? textPartner : textUser;
+        const targetEl = recMode === 'partner' ? textUser : textPartner;
+
+        sourceEl.value = text;
         toast('⏳ Đang dịch...');
-        const result = await translateText(text, fromL, toL);
-        if (result) {
-            dstEl.value = result;
+
+        const translated = await translateText(text, fromLang, toLang);
+        if (translated) {
+            targetEl.value = translated;
             toast('✅ Dịch xong!', 'success');
-            setTimeout(() => speak(result, toL), 350);
-            saveHist(text, fromL, result, toL);
+
+            // Auto-play TTS (short delay for stability)
+            setTimeout(() => {
+                speak(translated, toLang);
+            }, 300);
+
+            saveHist(text, fromLang, translated, toLang);
         }
     }
 
     // ═══════════════════════════════════════
     //  WAVEFORM
     // ═══════════════════════════════════════
-    let audioCtx, analyser, micStream, animId;
+    let waveAudioCtx, analyser, micStream, animId;
     const wCtx = waveCanvas.getContext('2d');
 
     function startWave() {
         waveDivider.classList.add('active');
         try {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            analyser = audioCtx.createAnalyser();
+            waveAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (waveAudioCtx.state === 'suspended') waveAudioCtx.resume();
+            analyser = waveAudioCtx.createAnalyser();
             analyser.fftSize = 256;
-            navigator.mediaDevices.getUserMedia({audio:true}).then(stream => {
+            navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
                 micStream = stream;
-                audioCtx.createMediaStreamSource(stream).connect(analyser);
+                waveAudioCtx.createMediaStreamSource(stream).connect(analyser);
                 drawWave();
-            }).catch(()=>{});
-        } catch {}
+            }).catch(err => console.warn('[VT] Waveform mic error:', err));
+        } catch (err) { console.warn('[VT] Waveform error:', err); }
     }
+
     function drawWave() {
         const buf = analyser.frequencyBinCount;
         const data = new Uint8Array(buf);
@@ -218,27 +418,30 @@ document.addEventListener('DOMContentLoaded', () => {
             animId = requestAnimationFrame(draw);
             analyser.getByteFrequencyData(data);
             wCtx.clearRect(0, 0, w, h);
-            const bars = 20, bw = w/bars*.55, gap = w/bars*.45;
+            const bars = 20, bw = w / bars * 0.55, gap = w / bars * 0.45;
             for (let i = 0; i < bars; i++) {
-                const v = data[Math.floor(i*buf/bars)] / 255;
-                const bh = Math.max(4, v * h * .8);
-                const x = i*(bw+gap)+gap/2, y = (h-bh)/2;
+                const v = data[Math.floor(i * buf / bars)] / 255;
+                const bh = Math.max(4, v * h * 0.8);
+                const x = i * (bw + gap) + gap / 2, y = (h - bh) / 2;
                 const t = i / bars;
-                const r = Math.round(color1[0]*(1-t) + color2[0]*t);
-                const g = Math.round(color1[1]*(1-t) + color2[1]*t);
-                const b = Math.round(color1[2]*(1-t) + color2[2]*t);
-                wCtx.fillStyle = `rgba(${r},${g},${b},${.35 + v*.65})`;
+                const r = Math.round(color1[0] * (1 - t) + color2[0] * t);
+                const g = Math.round(color1[1] * (1 - t) + color2[1] * t);
+                const b = Math.round(color1[2] * (1 - t) + color2[2] * t);
+                wCtx.fillStyle = `rgba(${r},${g},${b},${0.35 + v * 0.65})`;
                 wCtx.beginPath();
-                wCtx.roundRect(x, y, bw, bh, bw/2);
+                wCtx.roundRect(x, y, bw, bh, bw / 2);
                 wCtx.fill();
             }
         })();
     }
+
     function stopWave() {
         waveDivider.classList.remove('active');
         cancelAnimationFrame(animId);
-        if (micStream) micStream.getTracks().forEach(t=>t.stop());
-        if (audioCtx?.state !== 'closed') audioCtx?.close().catch(()=>{});
+        if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+        if (waveAudioCtx && waveAudioCtx.state !== 'closed') {
+            waveAudioCtx.close().catch(() => {});
+        }
         wCtx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
     }
 
@@ -247,52 +450,74 @@ document.addEventListener('DOMContentLoaded', () => {
     // ═══════════════════════════════════════
     let camStream = null;
     function openCam() {
-        haptic(); cameraOverlay.classList.add('active'); ocrStatus.textContent='';
-        navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1280}}})
-            .then(s => { camStream=s; cameraVideo.srcObject=s; })
-            .catch(() => { toast('Không mở được camera!','error'); closeCam(); });
+        haptic();
+        unlockAudio();
+        cameraOverlay.classList.add('active');
+        ocrStatus.textContent = '';
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } } })
+            .then(s => { camStream = s; cameraVideo.srcObject = s; })
+            .catch(() => { toast('Không mở được camera!', 'error'); closeCam(); });
     }
     function closeCam() {
         cameraOverlay.classList.remove('active');
-        if (camStream) { camStream.getTracks().forEach(t=>t.stop()); camStream=null; }
-        cameraVideo.srcObject=null;
+        if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+        cameraVideo.srcObject = null;
     }
     async function doOCR() {
         haptic(50);
-        const vw=cameraVideo.videoWidth, vh=cameraVideo.videoHeight;
-        cameraCanvas.width=vw; cameraCanvas.height=vh;
-        cameraCanvas.getContext('2d').drawImage(cameraVideo,0,0,vw,vh);
-        const img = cameraCanvas.toDataURL('image/jpeg',.9);
-        ocrStatus.textContent='🔍 Đang nhận diện...';
-        const langMap = {vi:'vie',en:'eng','zh-CN':'chi_sim',ja:'jpn',ko:'kor',fr:'fra',es:'spa',de:'deu',ru:'rus',th:'tha',pt:'por',id:'ind',ar:'ara',hi:'hin'};
+        const vw = cameraVideo.videoWidth, vh = cameraVideo.videoHeight;
+        if (!vw || !vh) { toast('Camera chưa sẵn sàng!', 'error'); return; }
+        cameraCanvas.width = vw;
+        cameraCanvas.height = vh;
+        cameraCanvas.getContext('2d').drawImage(cameraVideo, 0, 0, vw, vh);
+        const img = cameraCanvas.toDataURL('image/jpeg', 0.9);
+
+        ocrStatus.textContent = '🔍 Đang nhận diện...';
+        const langMap = { vi:'vie', en:'eng', 'zh-CN':'chi_sim', ja:'jpn', ko:'kor', fr:'fra', es:'spa', de:'deu', ru:'rus', th:'tha', pt:'por', id:'ind', ar:'ara', hi:'hin' };
         const tl = langMap[getLang(langPartnerEl.value).tr] || 'eng';
+
         try {
             const r = await Tesseract.recognize(img, tl, {
-                logger: m => { if (m.status==='recognizing text') ocrStatus.textContent=`🔍 Quét... ${Math.round(m.progress*100)}%`; }
+                logger: m => { if (m.status === 'recognizing text') ocrStatus.textContent = `🔍 Quét... ${Math.round(m.progress * 100)}%`; }
             });
-            const t = r.data.text.trim(); closeCam();
+            const t = r.data.text.trim();
+            closeCam();
             if (t) {
-                textPartner.value = t; toast('✅ Đang dịch...','success');
+                textPartner.value = t;
+                toast('✅ Đang dịch...', 'success');
                 const res = await translateText(t, langPartnerEl.value, langUserEl.value);
-                if (res) { textUser.value=res; speak(res, langUserEl.value); saveHist(t, langPartnerEl.value, res, langUserEl.value); }
-            } else toast('Không nhận diện được!','error');
-        } catch { ocrStatus.textContent=''; toast('Lỗi OCR!','error'); }
+                if (res) {
+                    textUser.value = res;
+                    speak(res, langUserEl.value);
+                    saveHist(t, langPartnerEl.value, res, langUserEl.value);
+                }
+            } else {
+                toast('Không nhận diện được văn bản!', 'error');
+            }
+        } catch (err) {
+            console.error('[VT] OCR error:', err);
+            ocrStatus.textContent = '';
+            toast('Lỗi nhận diện!', 'error');
+        }
     }
 
     // ═══════════════════════════════════════
     //  HISTORY
     // ═══════════════════════════════════════
     const HK = 'vt_hist';
-    const getHist = () => { try { return JSON.parse(localStorage.getItem(HK))||[]; } catch { return []; }};
-    function saveHist(s,sl,d,dl) {
+    const getHist = () => { try { return JSON.parse(localStorage.getItem(HK)) || []; } catch { return []; } };
+    function saveHist(s, sl, d, dl) {
         const h = getHist();
-        h.unshift({s, sl:getLang(sl).name, d, dl:getLang(dl).name, t:new Date().toLocaleString('vi-VN')});
-        if (h.length>50) h.pop();
+        h.unshift({ s, sl: getLang(sl).name, d, dl: getLang(dl).name, t: new Date().toLocaleString('vi-VN') });
+        if (h.length > 50) h.pop();
         localStorage.setItem(HK, JSON.stringify(h));
     }
     function renderHist() {
         const h = getHist();
-        if (!h.length) { historyList.innerHTML='<div class="history-empty"><i class="fa-solid fa-inbox" style="font-size:30px;display:block;margin-bottom:10px"></i>Chưa có lịch sử</div>'; return; }
+        if (!h.length) {
+            historyList.innerHTML = '<div class="history-empty"><i class="fa-solid fa-inbox" style="font-size:30px;display:block;margin-bottom:10px"></i>Chưa có lịch sử</div>';
+            return;
+        }
         historyList.innerHTML = h.map(i => `<div class="history-item">
             <div class="h-lang"><i class="fa-solid fa-circle" style="font-size:5px;color:#f87171"></i> ${i.sl}</div>
             <div class="h-text">${i.s}</div>
@@ -306,43 +531,60 @@ document.addEventListener('DOMContentLoaded', () => {
     // ═══════════════════════════════════════
     //  EVENTS
     // ═══════════════════════════════════════
-    micPartnerBtn.onclick = () => startRec('partner');
-    micUserBtn.onclick = () => startRec('user');
-    speakPartner.onclick = () => { haptic(); speak(textPartner.value, langPartnerEl.value); };
-    speakUser.onclick = () => { haptic(); speak(textUser.value, langUserEl.value); };
-    copyPartner.onclick = () => { if (textPartner.value) { navigator.clipboard.writeText(textPartner.value); haptic(); toast('📋 Đã sao chép!','success'); }};
-    copyUser.onclick = () => { if (textUser.value) { navigator.clipboard.writeText(textUser.value); haptic(); toast('📋 Đã sao chép!','success'); }};
+    micPartnerBtn.addEventListener('click', () => startRec('partner'));
+    micUserBtn.addEventListener('click', () => startRec('user'));
 
-    btnSwap.onclick = () => {
+    speakPartner.addEventListener('click', () => { haptic(); unlockAudio(); speak(textPartner.value, langPartnerEl.value); });
+    speakUser.addEventListener('click', () => { haptic(); unlockAudio(); speak(textUser.value, langUserEl.value); });
+
+    copyPartner.addEventListener('click', () => {
+        if (textPartner.value) { navigator.clipboard.writeText(textPartner.value); haptic(); toast('📋 Đã sao chép!', 'success'); }
+    });
+    copyUser.addEventListener('click', () => {
+        if (textUser.value) { navigator.clipboard.writeText(textUser.value); haptic(); toast('📋 Đã sao chép!', 'success'); }
+    });
+
+    btnSwap.addEventListener('click', () => {
         haptic();
-        [langPartnerEl.value, langUserEl.value] = [langUserEl.value, langPartnerEl.value];
-        [textPartner.value, textUser.value] = [textUser.value, textPartner.value];
+        const tmpL = langPartnerEl.value;
+        langPartnerEl.value = langUserEl.value;
+        langUserEl.value = tmpL;
+        const tmpT = textPartner.value;
+        textPartner.value = textUser.value;
+        textUser.value = tmpT;
         toast('🔄 Đã hoán đổi!');
-    };
+    });
 
-
-    btnTranslate.onclick = async () => {
+    btnTranslate.addEventListener('click', async () => {
         haptic();
+        unlockAudio();
         const t = textUser.value.trim();
-        if (!t) { toast('Nhập văn bản trước!','error'); return; }
+        if (!t) { toast('Nhập văn bản trước!', 'error'); return; }
         toast('⏳ Đang dịch...');
         const r = await translateText(t, langUserEl.value, langPartnerEl.value);
-        if (r) { textPartner.value=r; toast('✅ Dịch xong!','success'); speak(r, langPartnerEl.value); saveHist(t, langUserEl.value, r, langPartnerEl.value); }
-    };
+        if (r) {
+            textPartner.value = r;
+            toast('✅ Dịch xong!', 'success');
+            speak(r, langPartnerEl.value);
+            saveHist(t, langUserEl.value, r, langPartnerEl.value);
+        }
+    });
 
-    btnCamera.onclick = openCam;
-    closeCamera.onclick = closeCam;
-    captureBtn.onclick = doOCR;
+    btnCamera.addEventListener('click', openCam);
+    closeCamera.addEventListener('click', closeCam);
+    captureBtn.addEventListener('click', doOCR);
 
-    const openHist = () => { haptic(); renderHist(); historyPanel.classList.add('active'); historyOverlay.classList.add('active'); };
-    const closeHist = () => { historyPanel.classList.remove('active'); historyOverlay.classList.remove('active'); };
-    btnHistory.onclick = openHist;
-    closeHistory.onclick = closeHist;
-    historyOverlay.onclick = closeHist;
-    clearHistory.onclick = () => { localStorage.removeItem(HK); renderHist(); toast('🗑️ Đã xoá lịch sử'); };
+    btnHistory.addEventListener('click', () => { haptic(); renderHist(); historyPanel.classList.add('active'); historyOverlay.classList.add('active'); });
+    const closeHistFn = () => { historyPanel.classList.remove('active'); historyOverlay.classList.remove('active'); };
+    closeHistory.addEventListener('click', closeHistFn);
+    historyOverlay.addEventListener('click', closeHistFn);
+    clearHistory.addEventListener('click', () => { localStorage.removeItem(HK); renderHist(); toast('🗑️ Đã xoá lịch sử'); });
 
     // PWA
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('sw.js').catch(err => console.warn('[VT] SW error:', err));
+    }
 
+    console.log('[VT] Voice Translate Pro v3 loaded');
     toast('✨ Sẵn sàng phiên dịch!', 'success');
 });
