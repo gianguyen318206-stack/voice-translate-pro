@@ -593,11 +593,22 @@ document.addEventListener('DOMContentLoaded', () => {
     historyOverlay.addEventListener('click', closeHistFn);
     clearHistory.addEventListener('click', () => { localStorage.removeItem(HK); renderHist(); toast('🗑️ Đã xoá lịch sử'); });
 
-    // PWA
+    // Force unregister Service Workers to break PWA cache deadlock during updates
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('sw.js').catch(err => console.warn('[VT] SW error:', err));
+        navigator.serviceWorker.getRegistrations().then(registrations => {
+            if (registrations.length > 0) {
+                logDebug('🧹 Đang gỡ bỏ Service Worker cũ để xoá cache...', 'info');
+                Promise.all(registrations.map(r => r.unregister())).then(() => {
+                    caches.keys().then(names => Promise.all(names.map(n => caches.delete(n))));
+                    logDebug('♻️ Đã xoá cache Service Worker. Đang tải lại trang...', 'ok');
+                    setTimeout(() => window.location.reload(true), 500);
+                });
+            } else {
+                logDebug('✅ Không có Service Worker cũ kẹt. Đã nạp code mới v26.', 'ok');
+            }
+        });
     }
 
-    console.log('[VT] Voice Translate Pro v3 loaded');
+    console.log('[VT] Voice Translate Pro v26 loaded');
     toast('✨ Sẵn sàng phiên dịch!', 'success');
 });
