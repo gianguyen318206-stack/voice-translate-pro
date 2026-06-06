@@ -266,7 +266,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ttsQueue = [];
         ttsPlaying = false;
         ttsPlayer.pause();
-        ttsPlayer.src = '';
+        ttsPlayer.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
         ttsPlayer.onended = null;
         ttsPlayer.onerror = null;
         if (window.speechSynthesis) window.speechSynthesis.cancel();
@@ -305,9 +305,8 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Bless SpeechSynthesis + unlock ttsPlayer with user gesture
+        // Bless SpeechSynthesis + stop any active playback
         blessSpeechSynthesis();
-        unlockAudio();
         stopSpeak();
         haptic(50);
 
@@ -379,20 +378,15 @@ document.addEventListener('DOMContentLoaded', () => {
             processResult();
         };
 
-        // Start recognition with a 350ms cooldown delay.
-        // This gives the mobile OS time to transition the Audio Session 
-        // from Playback (SpeechSynthesis) to Recording, preventing freeze.
-        setTimeout(() => {
-            try {
-                logDebug('🚀 Đang gọi recognition.start()...', 'info');
-                recognition.start();
-                startWave();
-            } catch (err) {
-                logDebug(`❌ Không thể start() recognition: ${err.message}`, 'err');
-                cleanup();
-                toast('Không thể bật microphone!', 'error');
-            }
-        }, 350);
+        try {
+            logDebug('🚀 Đang gọi recognition.start() đồng bộ...', 'info');
+            recognition.start();
+            startWave();
+        } catch (err) {
+            logDebug(`❌ Không thể start() recognition: ${err.message}`, 'err');
+            cleanup();
+            toast('Không thể bật microphone!', 'error');
+        }
     }
 
     function stopRec() {
@@ -609,11 +603,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     setTimeout(() => window.location.reload(true), 500);
                 });
             } else {
-                logDebug('✅ Không có Service Worker cũ kẹt. Đã nạp code mới v27.', 'ok');
+                logDebug('✅ Không có Service Worker cũ kẹt. Đã nạp code mới v28.', 'ok');
             }
         });
     }
 
-    console.log('[VT] Voice Translate Pro v27 loaded');
+    console.log('[VT] Voice Translate Pro v28 loaded');
     toast('✨ Sẵn sàng phiên dịch!', 'success');
 });
