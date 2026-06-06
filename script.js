@@ -69,22 +69,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const ttsPlayer = document.createElement('audio');
     ttsPlayer.setAttribute('playsinline', '');
     ttsPlayer.volume = 1.0;
+    // Set a tiny silent audio track to initialize it
+    ttsPlayer.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
     document.body.appendChild(ttsPlayer);
 
     let audioUnlocked = false;
     function unlockAudio() {
         if (audioUnlocked) return;
-        // Play silent sound on the SAME element we'll use for TTS
-        ttsPlayer.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
-        const p = ttsPlayer.play();
-        if (p) p.then(() => { ttsPlayer.pause(); audioUnlocked = true; console.log('[VT] Audio unlocked'); }).catch(() => {});
-        // Also try AudioContext
-        try {
-            const ctx = new (window.AudioContext || window.webkitAudioContext)();
-            ctx.resume().then(() => ctx.close());
-        } catch {}
+        // Directly bless the ttsPlayer under the active user gesture
+        ttsPlayer.play()
+            .then(() => {
+                ttsPlayer.pause();
+                audioUnlocked = true;
+                console.log('[VT] ttsPlayer successfully unlocked');
+            })
+            .catch(e => console.warn('[VT] ttsPlayer unlock deferred:', e.message));
     }
-    ['click', 'touchstart', 'touchend'].forEach(evt => {
+    ['click', 'touchstart'].forEach(evt => {
         document.addEventListener(evt, unlockAudio, { once: false, passive: true });
     });
 

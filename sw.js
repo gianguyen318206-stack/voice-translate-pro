@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vt-pro-v3';
+const CACHE_NAME = 'vt-pro-v4';
 const ASSETS = ['./', './index.html', './style.css', './script.js', './manifest.json'];
 
 self.addEventListener('install', e => {
