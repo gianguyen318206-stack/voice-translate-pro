@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="description" content="Ứng dụng phiên dịch giọng nói thông minh AI">
+    <title>Voice Translate Pro</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#050510">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Animated background -->
+    <div class="bg-aurora">
+        <div class="aurora-orb orb-1"></div>
+        <div class="aurora-orb orb-2"></div>
+        <div class="aurora-orb orb-3"></div>
+    </div>
+
+    <div class="app">
+        <!-- HEADER -->
+        <header class="app-header">
+            <div class="logo">
+                <div class="logo-icon">
+                    <i class="fa-solid fa-globe"></i>
+                </div>
+                <div class="logo-text">
+                    <span class="logo-name">VoiceTranslate</span>
+                    <span class="logo-badge">PRO</span>
+                </div>
+            </div>
+            <button id="btn-history" class="header-btn" title="Lịch sử">
+                <i class="fa-solid fa-clock-rotate-left"></i>
+            </button>
+        </header>
+
+        <!-- MAIN CONTENT -->
+        <main class="main-content">
+            <!-- PARTNER CARD -->
+            <div class="card partner-card">
+                <div class="card-glow partner-glow"></div>
+                <div class="card-inner">
+                    <div class="card-header">
+                        <div class="lang-badge partner-badge">
+                            <i class="fa-solid fa-user-group"></i>
+                            <select id="lang-partner" class="lang-select"></select>
+                        </div>
+                        <div class="card-actions">
+                            <button class="action-btn" id="speak-partner" title="Phát âm">
+                                <i class="fa-solid fa-volume-high"></i>
+                            </button>
+                            <button class="action-btn" id="copy-partner" title="Sao chép">
+                                <i class="fa-regular fa-copy"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <textarea id="text-partner" class="card-text" placeholder="Bản dịch sẽ hiển thị ở đây..." readonly spellcheck="false"></textarea>
+                </div>
+            </div>
+
+            <!-- CENTER MIC CONTROLS -->
+            <div class="mic-zone">
+                <button id="mic-partner" class="mic-btn mic-partner" title="Thu âm đối tác">
+                    <span class="mic-pulse"></span>
+                    <span class="mic-pulse mic-pulse-2"></span>
+                    <div class="mic-circle">
+                        <i class="fa-solid fa-microphone"></i>
+                    </div>
+                    <span class="mic-text">Đối tác</span>
+                </button>
+
+                <div class="wave-divider">
+                    <canvas id="waveform"></canvas>
+                    <div class="wave-idle">
+                        <span></span><span></span><span></span><span></span><span></span>
+                    </div>
+                </div>
+
+                <button id="mic-user" class="mic-btn mic-user" title="Thu âm của bạn">
+                    <span class="mic-pulse"></span>
+                    <span class="mic-pulse mic-pulse-2"></span>
+                    <div class="mic-circle">
+                        <i class="fa-solid fa-microphone"></i>
+                    </div>
+                    <span class="mic-text">Bạn</span>
+                </button>
+            </div>
+
+            <!-- USER CARD -->
+            <div class="card user-card">
+                <div class="card-glow user-glow"></div>
+                <div class="card-inner">
+                    <textarea id="text-user" class="card-text" placeholder="Nhập văn bản hoặc bấm mic để nói..." spellcheck="false"></textarea>
+                    <div class="card-header">
+                        <div class="lang-badge user-badge">
+                            <i class="fa-solid fa-user"></i>
+                            <select id="lang-user" class="lang-select"></select>
+                        </div>
+                        <div class="card-actions">
+                            <button class="action-btn" id="speak-user" title="Phát âm">
+                                <i class="fa-solid fa-volume-high"></i>
+                            </button>
+                            <button class="action-btn" id="copy-user" title="Sao chép">
+                                <i class="fa-regular fa-copy"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- FLOATING TOOLBAR -->
+        <footer class="toolbar">
+            <button id="btn-camera" class="tool-btn"><i class="fa-solid fa-camera"></i><span>Chụp</span></button>
+            <button id="btn-swap" class="tool-btn"><i class="fa-solid fa-right-left"></i><span>Đổi</span></button>
+            <button id="btn-translate" class="tool-btn tool-accent"><i class="fa-solid fa-language"></i><span>Dịch</span></button>
+        </footer>
+
+        <!-- TOAST -->
+        <div id="toast" class="toast"></div>
+    </div>
+
+    <!-- HISTORY PANEL -->
+    <div id="history-overlay" class="overlay"></div>
+    <aside id="history-panel" class="slide-panel">
+        <div class="slide-header">
+            <h2><i class="fa-solid fa-clock-rotate-left"></i> Lịch sử hội thoại</h2>
+            <button id="close-history" class="header-btn"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div id="history-list" class="history-list"></div>
+        <button id="clear-history" class="danger-btn"><i class="fa-solid fa-trash-can"></i> Xoá tất cả</button>
+    </aside>
+
+    <!-- CAMERA -->
+    <div id="camera-overlay" class="camera-overlay">
+        <div class="cam-header">
+            <span><i class="fa-solid fa-camera"></i> Chụp văn bản để dịch</span>
+            <button id="close-camera" class="header-btn"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <video id="camera-video" autoplay playsinline></video>
+        <canvas id="camera-canvas" style="display:none;"></canvas>
+        <div class="cam-bottom">
+            <div id="ocr-status" class="ocr-status"></div>
+            <button id="capture-btn" class="capture-btn"><span class="capture-inner"></span></button>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
