@@ -60,27 +60,30 @@ document.addEventListener('DOMContentLoaded', () => {
     function haptic(ms = 25) { try { navigator.vibrate && navigator.vibrate(ms); } catch {} }
 
     // ═══════════════════════════════════════
-    //  AUDIO UNLOCK (critical for mobile)
-    //  Mobile browsers block audio until user
-    //  interacts with the page. We unlock on
-    //  first touch/click.
+    //  PERSISTENT AUDIO PLAYER (critical for mobile)
+    //  Mobile only allows audio on elements that
+    //  were .play()-ed during a user gesture.
+    //  We create ONE element, unlock it on first
+    //  click, then reuse it for ALL TTS playback.
     // ═══════════════════════════════════════
+    const ttsPlayer = document.createElement('audio');
+    ttsPlayer.setAttribute('playsinline', '');
+    ttsPlayer.volume = 1.0;
+    document.body.appendChild(ttsPlayer);
+
     let audioUnlocked = false;
     function unlockAudio() {
         if (audioUnlocked) return;
+        // Play silent sound on the SAME element we'll use for TTS
+        ttsPlayer.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+        const p = ttsPlayer.play();
+        if (p) p.then(() => { ttsPlayer.pause(); audioUnlocked = true; console.log('[VT] Audio unlocked'); }).catch(() => {});
+        // Also try AudioContext
         try {
-            // Method 1: Play silent audio
-            const a = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=');
-            a.volume = 0.01;
-            a.play().then(() => { a.pause(); a.remove(); }).catch(() => {});
-            // Method 2: Resume AudioContext
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
             ctx.resume().then(() => ctx.close());
-            audioUnlocked = true;
-            console.log('[VT] Audio unlocked');
-        } catch (e) { console.warn('[VT] Audio unlock failed:', e); }
+        } catch {}
     }
-    // Unlock on ANY user interaction
     ['click', 'touchstart', 'touchend'].forEach(evt => {
         document.addEventListener(evt, unlockAudio, { once: false, passive: true });
     });
@@ -104,9 +107,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ═══════════════════════════════════════
-    //  TTS - Google TTS + SpeechSynthesis fallback
+    //  TTS - Google TTS (reuse ttsPlayer)
+    //  + SpeechSynthesis fallback
     // ═══════════════════════════════════════
-    let ttsAudio = null, ttsQueue = [], ttsPlaying = false;
+    let ttsQueue = [], ttsPlaying = false, currentTTSLang = null;
 
     function splitTTS(text, maxLen = 180) {
         const chunks = [];
@@ -125,17 +129,17 @@ document.addEventListener('DOMContentLoaded', () => {
         stopSpeak();
         const ttsCode = getLang(langCode).tts;
         const chunks = splitTTS(text);
+        currentTTSLang = langCode;
 
-        // Build queue of Google TTS URLs
         ttsQueue = chunks.map(c =>
             `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(c)}&tl=${ttsCode}&client=tw-ob`
         );
         ttsPlaying = true;
         console.log('[VT] TTS start:', ttsCode, chunks.length, 'chunks');
-        playNextChunk(langCode);
+        playNextChunk();
     }
 
-    function playNextChunk(langCode) {
+    function playNextChunk() {
         if (!ttsQueue.length) {
             ttsPlaying = false;
             console.log('[VT] TTS done');
@@ -143,53 +147,50 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const url = ttsQueue.shift();
-        ttsAudio = new Audio();
-        ttsAudio.src = url;
-        ttsAudio.volume = 1.0;
 
-        ttsAudio.onended = () => playNextChunk(langCode);
-        ttsAudio.onerror = (e) => {
-            console.warn('[VT] Google TTS failed, trying SpeechSynthesis fallback', e);
-            // Fallback to browser SpeechSynthesis
-            speakFallback(decodeURIComponent(url.match(/q=([^&]+)/)?.[1] || ''), langCode);
+        // REUSE the same blessed audio element
+        ttsPlayer.src = url;
+        ttsPlayer.onended = () => playNextChunk();
+        ttsPlayer.onerror = () => {
+            console.warn('[VT] Google TTS failed, fallback to SpeechSynthesis');
+            const text = decodeURIComponent(url.match(/q=([^&]+)/)?.[1] || '');
+            speakFallback(text);
         };
 
-        const playPromise = ttsAudio.play();
-        if (playPromise) {
-            playPromise.catch((e) => {
-                console.warn('[VT] Audio play blocked:', e.message, '- using fallback');
-                speakFallback(decodeURIComponent(url.match(/q=([^&]+)/)?.[1] || ''), langCode);
-            });
-        }
+        ttsPlayer.play().catch((e) => {
+            console.warn('[VT] TTS play error:', e.message);
+            const text = decodeURIComponent(url.match(/q=([^&]+)/)?.[1] || '');
+            speakFallback(text);
+        });
     }
 
-    // SpeechSynthesis fallback when Google TTS fails
-    function speakFallback(text, langCode) {
+    // SpeechSynthesis fallback
+    function speakFallback(text) {
         if (!text || !window.speechSynthesis) {
-            playNextChunk(langCode);
+            playNextChunk();
             return;
         }
         window.speechSynthesis.cancel();
         const utter = new SpeechSynthesisUtterance(text);
-        const ttsCode = getLang(langCode).tts;
-        utter.lang = langCode || ttsCode;
+        const ttsCode = getLang(currentTTSLang).tts;
+        utter.lang = currentTTSLang || ttsCode;
         utter.rate = 0.9;
         utter.volume = 1.0;
-
-        // Try to find a matching voice
         const voices = window.speechSynthesis.getVoices();
         const match = voices.find(v => v.lang.startsWith(ttsCode)) || voices.find(v => v.lang.startsWith(ttsCode.split('-')[0]));
         if (match) utter.voice = match;
-
-        utter.onend = () => playNextChunk(langCode);
-        utter.onerror = () => playNextChunk(langCode);
+        utter.onend = () => playNextChunk();
+        utter.onerror = () => playNextChunk();
         window.speechSynthesis.speak(utter);
     }
 
     function stopSpeak() {
         ttsQueue = [];
         ttsPlaying = false;
-        if (ttsAudio) { ttsAudio.pause(); ttsAudio.src = ''; ttsAudio = null; }
+        ttsPlayer.pause();
+        ttsPlayer.src = '';
+        ttsPlayer.onended = null;
+        ttsPlayer.onerror = null;
         if (window.speechSynthesis) window.speechSynthesis.cancel();
     }
 
