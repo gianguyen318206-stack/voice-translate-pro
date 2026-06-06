@@ -379,15 +379,20 @@ document.addEventListener('DOMContentLoaded', () => {
             processResult();
         };
 
-        try {
-            logDebug('🚀 Đang gọi recognition.start()...', 'info');
-            recognition.start();
-            startWave();
-        } catch (err) {
-            logDebug(`❌ Không thể start() recognition: ${err.message}`, 'err');
-            cleanup();
-            toast('Không thể bật microphone!', 'error');
-        }
+        // Start recognition with a 350ms cooldown delay.
+        // This gives the mobile OS time to transition the Audio Session 
+        // from Playback (SpeechSynthesis) to Recording, preventing freeze.
+        setTimeout(() => {
+            try {
+                logDebug('🚀 Đang gọi recognition.start()...', 'info');
+                recognition.start();
+                startWave();
+            } catch (err) {
+                logDebug(`❌ Không thể start() recognition: ${err.message}`, 'err');
+                cleanup();
+                toast('Không thể bật microphone!', 'error');
+            }
+        }, 350);
     }
 
     function stopRec() {
@@ -604,11 +609,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     setTimeout(() => window.location.reload(true), 500);
                 });
             } else {
-                logDebug('✅ Không có Service Worker cũ kẹt. Đã nạp code mới v26.', 'ok');
+                logDebug('✅ Không có Service Worker cũ kẹt. Đã nạp code mới v27.', 'ok');
             }
         });
     }
 
-    console.log('[VT] Voice Translate Pro v26 loaded');
+    console.log('[VT] Voice Translate Pro v27 loaded');
     toast('✨ Sẵn sàng phiên dịch!', 'success');
 });
