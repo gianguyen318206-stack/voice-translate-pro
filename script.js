@@ -38,6 +38,53 @@ document.addEventListener('DOMContentLoaded', () => {
     const ocrStatus = $('ocr-status');
     const waveDivider = document.querySelector('.wave-divider');
     const toastEl = $('toast');
+    
+    // Debug & In-app Browser Elements
+    const debugPanel = $('debug-panel');
+    const debugContent = $('debug-content');
+    const inappAlert = $('inapp-alert');
+    const logoBadge = $('logo-badge');
+
+    // ─── DEBUG CONSOLE LOGGER ───
+    function logDebug(msg, type = 'info') {
+        if (!debugContent) return;
+        const line = document.createElement('div');
+        line.className = 'debug-line';
+        if (type === 'err') line.classList.add('debug-err');
+        if (type === 'ok') line.classList.add('debug-ok');
+        
+        const time = new Date().toLocaleTimeString('vi-VN');
+        line.innerHTML = `[${time}] ${msg}`;
+        debugContent.appendChild(line);
+        debugPanel.scrollTop = debugPanel.scrollHeight;
+        console.log(`[VT-DEBUG] ${msg}`);
+    }
+
+    // Toggle Debug Panel with 5 clicks on Logo badge
+    let logoClicks = 0;
+    if (logoBadge) {
+        logoBadge.addEventListener('click', () => {
+            logoClicks++;
+            if (logoClicks >= 5) {
+                debugPanel.classList.toggle('active');
+                logoClicks = 0;
+                logDebug('⚠️ Debug Panel toggled by user!', 'ok');
+            }
+        });
+    }
+
+    // Detect In-App Browsers (Zalo, FB Messenger, etc.)
+    function detectInAppBrowser() {
+        const ua = navigator.userAgent || navigator.vendor || window.opera;
+        const isInApp = (ua.indexOf("FBAN") > -1) || (ua.indexOf("FBAV") > -1) || (ua.indexOf("Zalo") > -1) || (ua.indexOf("Messenger") > -1) || (ua.indexOf("Line") > -1);
+        if (isInApp && inappAlert) {
+            inappAlert.style.display = 'block';
+            logDebug('⚠️ Cảnh báo: Đang chạy trong In-App Browser (Zalo/FB)!', 'err');
+        } else {
+            logDebug('📱 Trình duyệt chính quy hoặc độc lập.', 'ok');
+        }
+    }
+    detectInAppBrowser();
 
     // ─── POPULATE SELECTS ───
     LANGS.forEach(l => {
@@ -56,6 +103,7 @@ document.addEventListener('DOMContentLoaded', () => {
         toastEl.textContent = msg;
         toastEl.className = 'toast show ' + type;
         toastT = setTimeout(() => toastEl.className = 'toast', 2500);
+        logDebug(`Toast: ${msg}`, type === 'error' ? 'err' : (type === 'success' ? 'ok' : 'info'));
     }
     function haptic(ms = 25) { try { navigator.vibrate && navigator.vibrate(ms); } catch {} }
 
@@ -289,7 +337,7 @@ document.addEventListener('DOMContentLoaded', () => {
         recognition.maxAlternatives = 1;
 
         recognition.onstart = () => {
-            console.log('[VT] Recognition started, lang:', langCode);
+            logDebug(`🎤 [SpeechRecognition] Bắt đầu nhận diện (${langCode})`, 'info');
         };
 
         recognition.onresult = (e) => {
@@ -305,10 +353,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (finalText) accText += finalText;
             textEl.value = accText + (interim ? interim : '');
+            logDebug(`✍️ [Result] Interim: "${interim}", Final: "${finalText}"`, 'info');
         };
 
         recognition.onerror = (e) => {
-            console.error('[VT] Recognition error:', e.error);
+            logDebug(`⚠️ [Error] Lỗi SpeechRecognition: "${e.error}"`, 'err');
             if (e.error === 'no-speech') {
                 toast('🎤 Không nghe thấy... Hãy nói lại');
                 cleanup();
@@ -325,16 +374,17 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         recognition.onend = () => {
-            console.log('[VT] Recognition ended. Processing result.');
+            logDebug(`🛑 [SpeechRecognition] Kết thúc thu âm`, 'info');
             cleanup();
             processResult();
         };
 
         try {
+            logDebug('🚀 Đang gọi recognition.start()...', 'info');
             recognition.start();
             startWave();
         } catch (err) {
-            console.error('[VT] Failed to start recognition:', err);
+            logDebug(`❌ Không thể start() recognition: ${err.message}`, 'err');
             cleanup();
             toast('Không thể bật microphone!', 'error');
         }

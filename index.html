@@ -32,13 +32,19 @@
                 </div>
                 <div class="logo-text">
                     <span class="logo-name">VoiceTranslate</span>
-                    <span class="logo-badge">PRO</span>
+                    <span class="logo-badge" id="logo-badge">v26</span>
                 </div>
             </div>
             <button id="btn-history" class="header-btn" title="Lịch sử">
                 <i class="fa-solid fa-clock-rotate-left"></i>
             </button>
         </header>
+
+        <!-- IN-APP BROWSER ALERT BANNER -->
+        <div id="inapp-alert" class="inapp-alert">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            Bạn đang mở trong Zalo/Messenger. Hãy chọn <b>"Mở bằng trình duyệt"</b> (Chrome/Safari) để sử dụng được Micro!
+        </div>
 
         <!-- MAIN CONTENT -->
         <main class="main-content">
@@ -144,10 +150,16 @@
         </div>
         <video id="camera-video" autoplay playsinline></video>
         <canvas id="camera-canvas" style="display:none;"></canvas>
-        <div class="cam-bottom">
-            <div id="ocr-status" class="ocr-status"></div>
-            <button id="capture-btn" class="capture-btn"><span class="capture-inner"></span></button>
         </div>
+    </div>
+
+    <!-- DEBUG PANEL -->
+    <div id="debug-panel" class="debug-panel">
+        <div class="debug-title">
+            <span>🔧 SYSTEM DEBUG LOG</span>
+            <span style="color:#64748b" onclick="document.getElementById('debug-panel').classList.remove('active')">[Đóng]</span>
+        </div>
+        <div id="debug-content"></div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
