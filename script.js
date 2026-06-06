@@ -108,8 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ═══════════════════════════════════════
-    //  TTS - Google TTS (reuse ttsPlayer)
-    //  + SpeechSynthesis fallback
+    //  TTS - Google TTS (manual click) + SpeechSynthesis (auto playback)
     // ═══════════════════════════════════════
     let ttsQueue = [], ttsPlaying = false, currentTTSLang = null;
 
@@ -125,63 +124,93 @@ document.addEventListener('DOMContentLoaded', () => {
         return chunks;
     }
 
-    function speak(text, langCode) {
+    // Bless SpeechSynthesis on user gesture
+    function blessSpeechSynthesis() {
+        if (window.speechSynthesis) {
+            try {
+                window.speechSynthesis.cancel();
+                const utter = new SpeechSynthesisUtterance('');
+                utter.volume = 0.0;
+                window.speechSynthesis.speak(utter);
+                console.log('[VT] SpeechSynthesis blessed');
+            } catch (e) {
+                console.warn('[VT] SpeechSynthesis bless error:', e);
+            }
+        }
+    }
+
+    function speak(text, langCode, forceSpeechSynthesis = false) {
         if (!text.trim()) return;
         stopSpeak();
-        const ttsCode = getLang(langCode).tts;
-        const chunks = splitTTS(text);
         currentTTSLang = langCode;
 
+        // Force native SpeechSynthesis on mobile for auto-playback (avoids mic conflicts)
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        if (forceSpeechSynthesis || isMobile) {
+            console.log('[VT] Auto TTS: using SpeechSynthesis for stability');
+            const chunks = splitTTS(text);
+            ttsQueue = chunks;
+            ttsPlaying = true;
+            playNextSpeechSynthesis();
+            return;
+        }
+
+        // Otherwise try Google TTS for premium voice on manual click
+        const ttsCode = getLang(langCode).tts;
+        const chunks = splitTTS(text);
         ttsQueue = chunks.map(c =>
             `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(c)}&tl=${ttsCode}&client=tw-ob`
         );
         ttsPlaying = true;
-        console.log('[VT] TTS start:', ttsCode, chunks.length, 'chunks');
+        console.log('[VT] Manual TTS: using Google TTS', ttsCode);
         playNextChunk();
     }
 
     function playNextChunk() {
         if (!ttsQueue.length) {
             ttsPlaying = false;
-            console.log('[VT] TTS done');
             return;
         }
-
         const url = ttsQueue.shift();
-
-        // REUSE the same blessed audio element
         ttsPlayer.src = url;
         ttsPlayer.onended = () => playNextChunk();
         ttsPlayer.onerror = () => {
-            console.warn('[VT] Google TTS failed, fallback to SpeechSynthesis');
             const text = decodeURIComponent(url.match(/q=([^&]+)/)?.[1] || '');
             speakFallback(text);
         };
-
-        ttsPlayer.play().catch((e) => {
-            console.warn('[VT] TTS play error:', e.message);
+        ttsPlayer.play().catch(() => {
             const text = decodeURIComponent(url.match(/q=([^&]+)/)?.[1] || '');
             speakFallback(text);
         });
     }
 
-    // SpeechSynthesis fallback
-    function speakFallback(text) {
+    function playNextSpeechSynthesis() {
+        if (!ttsQueue.length) {
+            ttsPlaying = false;
+            return;
+        }
+        const text = ttsQueue.shift();
+        speakFallback(text, () => playNextSpeechSynthesis());
+    }
+
+    function speakFallback(text, callback = null) {
         if (!text || !window.speechSynthesis) {
-            playNextChunk();
+            if (callback) callback();
             return;
         }
         window.speechSynthesis.cancel();
         const utter = new SpeechSynthesisUtterance(text);
         const ttsCode = getLang(currentTTSLang).tts;
         utter.lang = currentTTSLang || ttsCode;
-        utter.rate = 0.9;
+        utter.rate = 0.95;
         utter.volume = 1.0;
+
         const voices = window.speechSynthesis.getVoices();
         const match = voices.find(v => v.lang.startsWith(ttsCode)) || voices.find(v => v.lang.startsWith(ttsCode.split('-')[0]));
         if (match) utter.voice = match;
-        utter.onend = () => playNextChunk();
-        utter.onerror = () => playNextChunk();
+
+        utter.onend = () => { if (callback) callback(); else playNextChunk(); };
+        utter.onerror = () => { if (callback) callback(); else playNextChunk(); };
         window.speechSynthesis.speak(utter);
     }
 
@@ -195,7 +224,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (window.speechSynthesis) window.speechSynthesis.cancel();
     }
 
-    // Pre-load voices for fallback
     if (window.speechSynthesis) {
         window.speechSynthesis.getVoices();
         window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
@@ -207,7 +235,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     let recognition = null, isRec = false, recMode = null, accText = '', userStop = false;
 
-    // Pre-request mic permission
     function requestMicPermission() {
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             navigator.mediaDevices.getUserMedia({ audio: true })
@@ -221,20 +248,18 @@ document.addEventListener('DOMContentLoaded', () => {
     requestMicPermission();
 
     function startRec(mode) {
-        // Unlock audio on user gesture (important!)
-        unlockAudio();
-
         if (!SR) {
             toast('Trình duyệt không hỗ trợ thu âm!', 'error');
             return;
         }
-
-        // If already recording, stop
         if (isRec) {
             stopRec();
             return;
         }
 
+        // Bless SpeechSynthesis + unlock ttsPlayer with user gesture
+        blessSpeechSynthesis();
+        unlockAudio();
         stopSpeak();
         haptic(50);
 
@@ -254,10 +279,12 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.classList.add('recording');
         toast(mode === 'partner' ? '🎤 Đang nghe đối tác...' : '🎤 Đang nghe bạn nói...');
 
-        // Create fresh recognition instance
         recognition = new SR();
         recognition.lang = langCode;
-        recognition.continuous = true;
+        
+        // Critical for mobile: continuous=false prevents browser lockouts.
+        // It captures one sentence and fires onend naturally.
+        recognition.continuous = false; 
         recognition.interimResults = true;
         recognition.maxAlternatives = 1;
 
@@ -278,58 +305,34 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (finalText) accText += finalText;
             textEl.value = accText + (interim ? interim : '');
-            console.log('[VT] Result:', { final: finalText, interim, accumulated: accText });
         };
 
         recognition.onerror = (e) => {
             console.error('[VT] Recognition error:', e.error);
             if (e.error === 'no-speech') {
-                // No speech detected, keep listening
-                toast('🎤 Không nghe thấy... Hãy nói to hơn');
+                toast('🎤 Không nghe thấy... Hãy nói lại');
+                cleanup();
                 return;
             }
             if (e.error === 'aborted') return;
             if (e.error === 'not-allowed') {
                 cleanup();
-                toast('⚠️ Vui lòng cho phép sử dụng Microphone!', 'error');
-                return;
-            }
-            if (e.error === 'network') {
-                cleanup();
-                toast('⚠️ Lỗi mạng! Kiểm tra kết nối internet.', 'error');
+                toast('⚠️ Vui lòng cấp quyền Microphone cho ứng dụng!', 'error');
                 return;
             }
             cleanup();
-            toast('Lỗi thu âm: ' + e.error, 'error');
+            toast('Lỗi mic: ' + e.error, 'error');
         };
 
         recognition.onend = () => {
-            console.log('[VT] Recognition ended, userStop:', userStop, 'isRec:', isRec);
-            if (!userStop && isRec) {
-                // Auto-restart (mobile browsers stop after each sentence)
-                try {
-                    setTimeout(() => {
-                        if (isRec && !userStop) {
-                            recognition.start();
-                            console.log('[VT] Auto-restarted recognition');
-                        }
-                    }, 100);
-                } catch (err) {
-                    console.error('[VT] Auto-restart failed:', err);
-                    cleanup();
-                    processResult();
-                }
-                return;
-            }
+            console.log('[VT] Recognition ended. Processing result.');
             cleanup();
             processResult();
         };
 
-        // Start recognition
         try {
             recognition.start();
             startWave();
-            console.log('[VT] Recognition.start() called');
         } catch (err) {
             console.error('[VT] Failed to start recognition:', err);
             cleanup();
@@ -341,7 +344,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!isRec) return;
         haptic(30);
         userStop = true;
-        console.log('[VT] User requested stop');
         try {
             recognition.stop();
         } catch (err) {
@@ -359,7 +361,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function processResult() {
-        const text = accText.trim();
+        const text = accText.trim() || (recMode === 'partner' ? textPartner.value.trim() : textUser.value.trim());
         if (!text || !recMode) {
             console.log('[VT] No text to process');
             return;
@@ -378,10 +380,10 @@ document.addEventListener('DOMContentLoaded', () => {
             targetEl.value = translated;
             toast('✅ Dịch xong!', 'success');
 
-            // Auto-play TTS (short delay for stability)
+            // Force auto-playback using SpeechSynthesis for mobile safety
             setTimeout(() => {
-                speak(translated, toLang);
-            }, 300);
+                speak(translated, toLang, true);
+            }, 200);
 
             saveHist(text, fromLang, translated, toLang);
         }

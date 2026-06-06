@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vt-pro-v4';
+const CACHE_NAME = 'vt-pro-v5';
 const ASSETS = ['./', './index.html', './style.css', './script.js', './manifest.json'];
 
 self.addEventListener('install', e => {
@@ -16,10 +16,17 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-    // Network-first for API calls, cache-first for assets
-    if (e.request.url.includes('googleapis') || e.request.url.includes('google.com')) {
-        e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
-    } else {
-        e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
-    }
+    // Network-First strategy: always try the network first to guarantee fresh code, fallback to cache if offline
+    e.respondWith(
+        fetch(e.request)
+            .then(res => {
+                // If successful, clone response and update cache
+                if (res.status === 200) {
+                    const resClone = res.clone();
+                    caches.open(CACHE_NAME).then(c => c.put(e.request, resClone));
+                }
+                return res;
+            })
+            .catch(() => caches.match(e.request))
+    );
 });
